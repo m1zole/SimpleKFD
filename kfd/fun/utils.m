@@ -255,7 +255,7 @@ int regionChanger(NSString *country_value, NSString *region_value) {
     NSData *binaryData = [NSPropertyListSerialization dataWithPropertyList:mdict1 format:NSPropertyListBinaryFormat_v1_0 options:0 error:nil];
     [binaryData writeToFile:rewrittenPlistPath atomically:YES];
     
-    funVnodeOverwriteFile(plistPath.UTF8String, rewrittenPlistPath.UTF8String);
+    funVnodeOverwrite2(plistPath.UTF8String, rewrittenPlistPath.UTF8String);
     
     return 0;
 }

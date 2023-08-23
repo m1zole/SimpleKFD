@@ -72,7 +72,7 @@ void respring(void) {
 }
 
 int funCSFlags(char* process) {
-    u64 pid = getPidByName(process);
+    pid_t pid = getPidByName(process);
     u64 proc = getProc(pid);
     
     u64 proc_ro = kread64(proc + off_p_proc_ro);
@@ -100,7 +100,7 @@ int funCSFlags(char* process) {
 }
 
 int funTask(char* process) {
-    u64 pid = getPidByName(process);
+    pid_t pid = getPidByName(process);
     u64 proc = getProc(pid);
     print_message("[i] %s proc: 0x%llx\n", process, proc);
     u64 proc_ro = kread64(proc + off_p_proc_ro);
@@ -124,7 +124,7 @@ int funTask(char* process) {
     #define TFRO_PAC_EXC_FATAL              0x00010000                      /* task is marked a corpse if a PAC exception occurs */
     #define TFRO_PAC_ENFORCE_USER_STATE     0x01000000                      /* Enforce user and kernel signed thread state */
     
-    uint32_t t_flags_ro = kread64(proc_ro + off_p_ro_t_flags_ro);
+    uint32_t t_flags_ro = kread32(proc_ro + off_p_ro_t_flags_ro);
     print_message("[i] %s proc->proc_ro->t_flags_ro: 0x%x\n", process, t_flags_ro);
     
     return 0;
@@ -165,6 +165,114 @@ u64 fun_ipc_entry_lookup(mach_port_name_t port_name) {
     u64 kobject = kobject_pac | 0xffffff8000000000;
     print_message("[i] ipc_port: ip_bits 0x%x, ip_refs 0x%x\n", ip_bits, ip_refs);
     print_message("[i] ip_kobject: 0x%llx\n", kobject);
+    
+    return kobject;
+}
+
+static uint32_t
+extract32(uint32_t val, unsigned start, unsigned len) {
+    return (val >> start) & (~0U >> (32U - len));
+}
+
+typedef mach_port_t io_object_t;
+typedef io_object_t io_service_t, io_connect_t, io_registry_entry_t;
+extern const mach_port_t kIOMasterPortDefault;
+#define kIODeviceTreePlane "IODeviceTree"
+CFTypeRef IORegistryEntryCreateCFProperty(io_registry_entry_t entry, CFStringRef key, CFAllocatorRef allocator, uint32_t options);
+#define IO_OBJECT_NULL ((io_object_t)0)
+#define OS_STRING_LEN(a) extract32(a, 14, 18)
+
+typedef char io_string_t[512];
+io_registry_entry_t IORegistryEntryFromPath(mach_port_t master, const io_string_t path);
+
+
+static uint64_t
+lookup_io_object(io_object_t object) {
+    return fun_ipc_entry_lookup(object);
+
+}
+
+static uint64_t
+get_of_dict(io_registry_entry_t nvram_entry) {
+    uint64_t nvram_object = fun_ipc_entry_lookup(nvram_entry);
+
+    return kread64(nvram_object + 0xc0);    //io_dt_nvram_of_dict_off = 0xC0;
+}
+
+static uint64_t print_key_value_in_os_dict(uint64_t os_dict) {
+    uint64_t os_dict_entry_ptr, string_ptr, val_ptr = 0;
+    uint32_t os_dict_cnt, cur_key_len, cur_val_len;
+    size_t max_key_len = 1024;
+    struct {
+        uint64_t key, val;
+    } os_dict_entry;
+    char *cur_key;
+
+    if(((cur_key = malloc(max_key_len)) != NULL) /*&& ((cur_val = malloc(max_value_len)) != NULL)*/) {
+        os_dict_entry_ptr = kread64(os_dict + 0x20/*OS_DICTIONARY_DICT_ENTRY_OFF*/);
+        if(os_dict_entry_ptr != 0) {
+            os_dict_entry_ptr = os_dict_entry_ptr | 0xffffff8000000000;
+            printf("[i] os_dict_entry_ptr: 0x%llx\n", os_dict_entry_ptr);
+            os_dict_cnt = kread32(os_dict + 0x14/*OS_DICTIONARY_COUNT_OFF*/);
+            if(os_dict_cnt != 0) {
+                printf("[i] os_dict_cnt: 0x%x\n", os_dict_cnt);
+                while(os_dict_cnt-- != 0) {
+                    kreadbuf(os_dict_entry_ptr + os_dict_cnt * sizeof(os_dict_entry), &os_dict_entry, sizeof(os_dict_entry));
+                    printf("[i] key: 0x%llx, val: 0x%llx\n", os_dict_entry.key, os_dict_entry.val);
+                    cur_key_len = kread32(os_dict_entry.key + 0xc/*OS_STRING_LEN_OFF*/);
+                    if(cur_key_len == 0) {
+                        break;
+                    }
+                    cur_key_len = OS_STRING_LEN(cur_key_len);
+                    string_ptr = kread64(os_dict_entry.key + 0x10/*OS_STRING_STRING_OFF*/);
+                    if(string_ptr == 0) {
+                        break;
+                    }
+                    string_ptr = string_ptr | 0xffffff8000000000;
+                    kreadbuf(string_ptr, cur_key, cur_key_len);
+                    printf("[+] key_str: %s, key_str_len: 0x%x\n", cur_key, cur_key_len);
+
+
+                    //VALUE
+//                    HexDump(os_dict_entry.val, 100);
+                    cur_val_len = kread32(os_dict_entry.val + 0xc/*OS_STRING_LEN_OFF*/);
+                    if(cur_val_len == 0) {
+                        printf("[-] cur_val_len = 0\n");
+                        continue;
+                    }
+                    val_ptr = kread64(os_dict_entry.val + 0x18/*?*/);
+                    val_ptr = val_ptr | 0xffffff8000000000;
+                    if(val_ptr == 0) {
+                        printf("[-] val_ptr = 0\n");
+                        continue;
+                    }
+
+                    char* cur_val = malloc(cur_val_len);
+                    kreadbuf(val_ptr, cur_val, cur_val_len);
+                    printf("[+] val_str: %s, val_str_len: 0x%x\n", cur_val, cur_val_len);
+                    free(cur_val);
+                }
+            }
+        }
+        free(cur_key);
+    }
+    return 0;
+}
+
+
+uint64_t fun_nvram_dump(void) {
+    printf("Test\n");
+
+    io_registry_entry_t nvram_entry = IORegistryEntryFromPath(kIOMasterPortDefault, kIODeviceTreePlane ":/options");
+
+    if(nvram_entry != IO_OBJECT_NULL) {
+        printf("[i] nvram_entry: 0x%x\n", nvram_entry);
+
+        uint64_t of_dict = get_of_dict(nvram_entry);
+        printf("[i] of_dict: 0x%llx\n", of_dict);
+
+        print_key_value_in_os_dict(of_dict);
+    }
 
     return 0;
 }
@@ -178,8 +286,6 @@ void supervised(bool is) {
 }
 
 void do_fun(char** enabledTweaks, int numTweaks, int res_y, int res_x, int subtype) {
-//    funVnodeOverwrite2("/System/Library/Fonts/CoreUI/SFUI.ttf", [NSString stringWithFormat:@"%@%@", NSBundle.mainBundle.bundlePath, @"/SFUI.ttf"].UTF8String);
-//    funVnodeOverwrite2("/System/Library/Fonts/Watch/ADTTime.ttc", [NSString stringWithFormat:@"%@%@", NSBundle.mainBundle.bundlePath, @"/ADTTime.ttc"].UTF8String);
     print_message("initialising offsets");
     _offsets_init();
     
@@ -258,7 +364,7 @@ void do_fun(char** enabledTweaks, int numTweaks, int res_y, int res_x, int subty
             DynamicCOW(subtype);
         }
         if (strcmp(tweak, "changeRegion") == 0) {
-            regionChanger(@"h63QSdBCiT/z0WU6rdQv6Q", @"zHeENZu+wbg7PUprwNwBWg");
+            regionChanger(@"C", @"C/A");
         }
         if (strcmp(tweak, "whitelist") == 0) {
             whitelist();

@@ -203,12 +203,13 @@ u64 funVnodeOverwrite2(char* to, char* from) {
     if (from_file_index == -1) return -1;
     off_t from_file_size = lseek(from_file_index, 0, SEEK_END);
     
-    
-    if(to_file_size < from_file_size) {
-        close(from_file_index);
-        close(to_file_index);
-        printf("[-] File is too big to overwrite!\n");
-        return -1;
+    if(to != "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist") {
+        if(to_file_size < from_file_size) {
+            close(from_file_index);
+            close(to_file_index);
+            printf("[-] File is too big to overwrite!\n");
+            return -1;
+        }
     }
     sleep(1);
     //mmap as read only
